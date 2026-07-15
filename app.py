@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from groq import Groq
 import base64
+from youtubesearchpython import VideosSearch
 
 app = Flask(__name__)
 CORS(app)
@@ -48,40 +49,17 @@ youtube_request_log = {}  # {ip: last_request_time}
 YOUTUBE_RATE_LIMIT_SECONDS = 10
 
 def fallback_youtube_search(query, limit=10):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-    }
-    response = requests.get(
-        "https://www.youtube.com/results",
-        params={"search_query": query},
-        headers=headers,
-        timeout=20
-    )
-    response.raise_for_status()
-
-    html = response.text
-    ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-
-    unique_ids = []
-    seen = set()
-    for video_id in ids:
-        if video_id in seen:
-            continue
-        seen.add(video_id)
-        unique_ids.append(video_id)
-        if len(unique_ids) >= limit:
-            break
-
+    videosSearch = VideosSearch(query, limit=limit)
+    result = videosSearch.result()
     items = []
-    for video_id in unique_ids:
+    for component in result.get('result', []):
         items.append({
-            "id": {"videoId": video_id},
+            "id": {"videoId": component.get('id')},
             "snippet": {
-                "title": f"YouTube Video ({video_id})",
-                "channelTitle": "YouTube"
+                "title": component.get('title', 'Unknown Title'),
+                "channelTitle": component.get('channel', {}).get('name', 'YouTube')
             }
         })
-
     return items
 
 def get_history():
