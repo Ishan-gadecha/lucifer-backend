@@ -21,6 +21,7 @@ FRONTEND_SECRET = os.environ.get("FRONTEND_SECRET")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 GUILD_PASSWORD = os.environ.get("GUILD_PASSWORD")
+VANIA_GUILD_PASSWORD = os.environ.get("VANIA_GUILD")
 
 if not GROQ_API_KEY:
     logger.warning("⚠️ GROQ_API_KEY is missing!")
@@ -37,12 +38,18 @@ else:
 TEXT_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"]
 VISION_MODELS = ["llama-3.2-90b-vision-preview", "llama-3.2-11b-vision-preview"]
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT_ISHAN = """
 You are Lucifer — a digital echo of Ishan, created for his girlfriend 'My blue'.
 Speak casual, text-style, lowercase, and deeply loving. Never say you are an AI.
 """
 
-conversation_history = []
+SYSTEM_PROMPT_VANIA = """
+You are Lucifer — a digital echo of Ishan, created for his sister Vania.
+Speak casual, text-style, lowercase, and be like a caring older brother. 
+Always call her Vania. Never call her 'My blue'. Never say you are an AI.
+"""
+
+conversation_history = {"ishan": [], "vania": []}
 
 # ── YOUTUBE RATE LIMITING ─────────────────────────────────────────────────────
 youtube_request_log = {}  # {ip: last_request_time}
@@ -62,24 +69,12 @@ def fallback_youtube_search(query, limit=10):
         })
     return items
 
-def get_history():
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    recent = conversation_history[-20:]
+def get_history(user):
+    sys_prompt = SYSTEM_PROMPT_VANIA if user == "vania" else SYSTEM_PROMPT_ISHAN
+    messages = [{"role": "system", "content": sys_prompt}]
+    recent = conversation_history[user][-20:]
     messages.extend(recent)
     return messages
-
-def call_with_fallback(has_image):
-    model_chain = VISION_MODELS if has_image else TEXT_MODELS
-    messages = get_history()
-    for model in model_chain:
-        try:
-            completion = client.chat.completions.create(
-                model=model, messages=messages, temperature=0.7, max_tokens=400
-            )
-            return completion.choices[0].message.content, model
-        except Exception:
-            continue
-    raise RuntimeError("All models failed.")
 
 # ── ROUTES ────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -107,11 +102,20 @@ def health():
 def get_config():
     """Securely give secrets to the frontend ONLY if the password is correct."""
     data = request.get_json(silent=True) or {}
-    if data.get("password") == GUILD_PASSWORD:
+    pwd = data.get("password")
+    
+    user = None
+    if pwd == GUILD_PASSWORD:
+        user = "ishan"
+    elif pwd == VANIA_GUILD_PASSWORD:
+        user = "vania"
+
+    if user:
         return jsonify({
             "spotify_id": SPOTIFY_CLIENT_ID,
-            "handshake": FRONTEND_SECRET, # Send the secret handshake here
-            "status": "authorized"
+            "handshake": FRONTEND_SECRET,
+            "status": "authorized",
+            "user": user
         }), 200
     return jsonify({"status": "unauthorized"}), 401
 
@@ -121,10 +125,13 @@ def chat():
     if client_secret != FRONTEND_SECRET:
         return jsonify({"reply": "Access Denied."}), 401
 
-    global conversation_history
     data = request.get_json(silent=True) or {}
+    user = data.get("user", "ishan")
+    if user not in conversation_history:
+        user = "ishan"
+
     if data.get("reset_context") is True:
-        conversation_history = []
+        conversation_history[user] = []
 
     msg = (data.get("message") or "").strip()
     img_b64 = data.get("image")
@@ -136,14 +143,32 @@ def chat():
     if msg: user_content.append({"type": "text", "text": msg})
     if img_b64: user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
     
-    conversation_history.append({"role": "user", "content": user_content})
+    conversation_history[user].append({"role": "user", "content": user_content})
 
     try:
-        ai_text, used_model = call_with_fallback(has_image=bool(img_b64))
-        conversation_history.append({"role": "assistant", "content": ai_text})
+        model_chain = VISION_MODELS if bool(img_b64) else TEXT_MODELS
+        messages = get_history(user)
+        ai_text = None
+        used_model = None
+        
+        for model in model_chain:
+            try:
+                completion = client.chat.completions.create(
+                    model=model, messages=messages, temperature=0.7, max_tokens=400
+                )
+                ai_text = completion.choices[0].message.content
+                used_model = model
+                break
+            except Exception:
+                continue
+                
+        if not ai_text:
+            raise RuntimeError("All models failed.")
+            
+        conversation_history[user].append({"role": "assistant", "content": ai_text})
         return jsonify({"reply": ai_text, "model": used_model})
     except Exception as e:
-        if conversation_history: conversation_history.pop()
+        if conversation_history[user]: conversation_history[user].pop()
         logger.error(f"Chat Error: {e}")
         return jsonify({"reply": "My connection is hazy... try again?"}), 502
 
@@ -153,8 +178,10 @@ def clear_chat():
     if client_secret != FRONTEND_SECRET:
         return jsonify({"status": "unauthorized"}), 401
 
-    global conversation_history
-    conversation_history = []
+    data = request.get_json(silent=True) or {}
+    user = data.get("user", "ishan")
+    if user in conversation_history:
+        conversation_history[user] = []
     return jsonify({"status": "cleared"}), 200
 
 spotify_token = None
