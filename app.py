@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from groq import Groq
+import base64
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
 FRONTEND_SECRET = os.environ.get("FRONTEND_SECRET")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 GUILD_PASSWORD = os.environ.get("GUILD_PASSWORD")
 
 if not GROQ_API_KEY:
@@ -176,6 +178,63 @@ def clear_chat():
     global conversation_history
     conversation_history = []
     return jsonify({"status": "cleared"}), 200
+
+spotify_token = None
+spotify_token_expires = 0
+
+def get_spotify_token():
+    global spotify_token, spotify_token_expires
+    now = datetime.now().timestamp()
+    if spotify_token and now < spotify_token_expires:
+        return spotify_token
+
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        raise Exception("Spotify credentials missing. Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render.")
+
+    auth_string = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+    auth_bytes = auth_string.encode("utf-8")
+    auth_base64 = str(base64.b64encode(auth_bytes), "utf-8")
+    
+    url = "https://accounts.spotify.com/api/token"
+    headers = {
+        "Authorization": "Basic " + auth_base64,
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {"grant_type": "client_credentials"}
+    
+    res = requests.post(url, headers=headers, data=data)
+    res.raise_for_status()
+    json_result = res.json()
+    
+    spotify_token = json_result["access_token"]
+    spotify_token_expires = now + json_result.get("expires_in", 3600) - 60
+    return spotify_token
+
+@app.route("/search-spotify", methods=["POST"])
+def search_spotify():
+    """Search Spotify using Client Credentials Flow."""
+    client_secret = request.headers.get("X-Lucifer-Secret")
+    if client_secret != FRONTEND_SECRET:
+        return jsonify({"error": "Access Denied."}), 401
+
+    data = request.get_json(silent=True) or {}
+    query = data.get("query")
+    if not query:
+        return jsonify({"error": "Missing query."}), 400
+
+    try:
+        token = get_spotify_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        url = "https://api.spotify.com/v1/search"
+        params = {"q": query, "type": "track", "limit": 10}
+        
+        res = requests.get(url, headers=headers, params=params)
+        res.raise_for_status()
+        
+        return jsonify(res.json()), 200
+    except Exception as e:
+        logger.error(f"Spotify Search Error: {e}")
+        return jsonify({"error": str(e)}), 502
 
 @app.route("/search-youtube", methods=["POST"])
 def search_youtube():
