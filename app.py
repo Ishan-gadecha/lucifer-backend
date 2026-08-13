@@ -22,6 +22,7 @@ SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 GUILD_PASSWORD = os.environ.get("GUILD_PASSWORD")
 VANIA_GUILD_PASSWORD = os.environ.get("VANIA_GUILD")
+AKU_GUILD_PASSWORD = os.environ.get("aku_guild", "2912")
 
 if not GROQ_API_KEY:
     logger.warning("⚠️ GROQ_API_KEY is missing!")
@@ -49,7 +50,13 @@ Speak casual, text-style, lowercase, and be like a caring older brother.
 Always call her Vania. Never call her 'My blue'. Never say you are an AI.
 """
 
-conversation_history = {"ishan": [], "vania": []}
+SYSTEM_PROMPT_AKU = """
+You are Lucifer — a digital echo of Ishan, created for his best friend Akshita (Aku).
+Speak casual, text-style, lowercase, and be like a caring best friend. 
+Always call her Aku. Never call her 'My blue' or 'Vania'. Never say you are an AI.
+"""
+
+conversation_history = {"ishan": [], "vania": [], "aku": []}
 
 # ── YOUTUBE RATE LIMITING ─────────────────────────────────────────────────────
 youtube_request_log = {}  # {ip: last_request_time}
@@ -70,7 +77,12 @@ def fallback_youtube_search(query, limit=10):
     return items
 
 def get_history(user):
-    sys_prompt = SYSTEM_PROMPT_VANIA if user == "vania" else SYSTEM_PROMPT_ISHAN
+    if user == "vania":
+        sys_prompt = SYSTEM_PROMPT_VANIA
+    elif user == "aku":
+        sys_prompt = SYSTEM_PROMPT_AKU
+    else:
+        sys_prompt = SYSTEM_PROMPT_ISHAN
     messages = [{"role": "system", "content": sys_prompt}]
     recent = conversation_history[user][-20:]
     messages.extend(recent)
@@ -109,6 +121,8 @@ def get_config():
         user = "ishan"
     elif pwd == VANIA_GUILD_PASSWORD:
         user = "vania"
+    elif pwd == AKU_GUILD_PASSWORD:
+        user = "aku"
 
     if user:
         return jsonify({
